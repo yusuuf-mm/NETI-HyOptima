@@ -1,0 +1,32 @@
+# NETI-HyOptima Core Dependencies
+# Phase 1: Mathematical Optimization Engine
+
+# Optimization
+pyomo>=6.6.0
+highspy>=1.5.0
+pulp>=2.7.0
+
+# Data Processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Visualization
+matplotlib>=3.7.0
+plotly>=5.15.0
+
+# Machine Learning (Phase 2+)
+scikit-learn>=1.3.0
+xgboost>=1.7.0
+
+# API Development (Phase 4+)
+fastapi>=0.100.0
+uvicorn>=0.23.0
+pydantic>=2.0.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Utilities
+python-dotenv>=1.0.0
+tqdm>=4.65.0
