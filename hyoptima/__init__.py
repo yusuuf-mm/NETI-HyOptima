@@ -32,6 +32,7 @@ from .simulation import (
     SimulationConfig,
     SimulationResult,
     create_default_uncertainties,
+    create_conservative_uncertainties,
 )
 
 __all__ = [
@@ -52,4 +53,5 @@ __all__ = [
     "SimulationConfig",
     "SimulationResult",
     "create_default_uncertainties",
+    "create_conservative_uncertainties",
 ]

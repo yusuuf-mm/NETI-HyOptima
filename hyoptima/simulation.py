@@ -458,6 +458,105 @@ class MonteCarloSimulator:
         
         return summary
     
+    def technology_adoption(self, threshold_kw: float = 1.0) -> Dict[str, Any]:
+        """
+        Compute technology selection frequency across scenarios.
+        
+        This metric answers: "How often is each technology chosen?"
+        
+        This is more valuable than average LCOE for planning because:
+        - Planners need to know what is consistently chosen
+        - Shows robustness of technology selection
+        - Identifies technologies that are marginal vs essential
+        
+        Args:
+            threshold_kw: Minimum capacity to count as "selected" (default 1 kW)
+        
+        Returns:
+            Dictionary with adoption probabilities and statistics
+        """
+        if not self.results:
+            return {"error": "No results available"}
+        
+        n = len(self.results)
+        
+        # Count selections
+        solar_selected = sum(1 for r in self.results if r.solar_capacity >= threshold_kw)
+        gas_selected = sum(1 for r in self.results if r.gas_capacity >= threshold_kw)
+        battery_selected = sum(1 for r in self.results if r.battery_capacity >= threshold_kw)
+        
+        # Compute adoption probabilities
+        solar_prob = solar_selected / n
+        gas_prob = gas_selected / n
+        battery_prob = battery_selected / n
+        
+        # Conditional statistics (when technology IS selected)
+        solar_when_selected = [r.solar_capacity for r in self.results if r.solar_capacity >= threshold_kw]
+        gas_when_selected = [r.gas_capacity for r in self.results if r.gas_capacity >= threshold_kw]
+        battery_when_selected = [r.battery_capacity for r in self.results if r.battery_capacity >= threshold_kw]
+        
+        def safe_stats(arr, name):
+            if not arr:
+                return {"mean": 0, "std": 0, "min": 0, "max": 0, "count": 0}
+            return {
+                "mean": float(np.mean(arr)),
+                "std": float(np.std(arr)),
+                "min": float(np.min(arr)),
+                "max": float(np.max(arr)),
+                "count": len(arr),
+            }
+        
+        # Technology combinations
+        solar_only = sum(1 for r in self.results 
+                        if r.solar_capacity >= threshold_kw 
+                        and r.gas_capacity < threshold_kw)
+        gas_only = sum(1 for r in self.results 
+                      if r.gas_capacity >= threshold_kw 
+                      and r.solar_capacity < threshold_kw)
+        hybrid = sum(1 for r in self.results 
+                    if r.solar_capacity >= threshold_kw 
+                    and r.gas_capacity >= threshold_kw)
+        
+        return {
+            "adoption_probability": {
+                "solar": {
+                    "probability": solar_prob,
+                    "selected_count": solar_selected,
+                    "total_scenarios": n,
+                },
+                "gas": {
+                    "probability": gas_prob,
+                    "selected_count": gas_selected,
+                    "total_scenarios": n,
+                },
+                "battery": {
+                    "probability": battery_prob,
+                    "selected_count": battery_selected,
+                    "total_scenarios": n,
+                },
+            },
+            "capacity_when_selected": {
+                "solar_kw": safe_stats(solar_when_selected, "solar"),
+                "gas_kw": safe_stats(gas_when_selected, "gas"),
+                "battery_kwh": safe_stats(battery_when_selected, "battery"),
+            },
+            "system_configurations": {
+                "solar_only": {
+                    "count": solar_only,
+                    "probability": solar_only / n,
+                },
+                "gas_only": {
+                    "count": gas_only,
+                    "probability": gas_only / n,
+                },
+                "hybrid_solar_gas": {
+                    "count": hybrid,
+                    "probability": hybrid / n,
+                },
+            },
+            "threshold_kw": threshold_kw,
+        }
+    
     def risk_metrics(self) -> Dict[str, float]:
         """
         Compute risk metrics from simulation results.
@@ -540,6 +639,7 @@ class MonteCarloSimulator:
             },
             "summary": self.summary(),
             "risk_metrics": self.risk_metrics(),
+            "technology_adoption": self.technology_adoption(),
             "scenarios": [
                 {
                     "scenario_id": r.scenario_id,
@@ -566,34 +666,104 @@ def create_default_uncertainties() -> List[UncertaintyDistribution]:
     """
     Create default uncertainty distributions for Nigerian energy system.
     
+    Prioritized by impact on planning decisions:
+    1. Fuel cost volatility - MAJOR (dominant uncertainty in Nigeria)
+    2. Carbon price - MAJOR (policy transition risk)
+    3. Demand forecast - MODERATE
+    4. Solar variability - MINOR (but useful for robustness)
+    
     Returns:
         List of UncertaintyDistribution objects
     """
     return [
-        # Solar capacity factor: 20% ± 15% (weather variability)
-        UncertaintyDistribution(
-            name="solar_cf",
-            base_value=0.20,
-            distribution_type="normal",
-            std_dev=0.03,
-        ),
-        
-        # Fuel cost: $0.08/kWh with triangular distribution
-        # Most likely $0.08, range $0.05-$0.12
+        # FUEL COST: Primary uncertainty in Nigeria
+        # Gas prices highly volatile, range $0.04-$0.15/kWh
+        # This is the dominant risk factor for energy planning
         UncertaintyDistribution(
             name="fuel_cost",
             base_value=0.08,
             distribution_type="triangular",
-            min_value=0.05,
-            max_value=0.12,
-            mode=0.08,
+            min_value=0.04,   # Low gas price scenario
+            max_value=0.15,   # High gas price shock
+            mode=0.08,        # Most likely
         ),
         
-        # Demand multiplier: ±10% (forecast uncertainty)
+        # CARBON PRICE: Policy transition risk
+        # Nigeria ETP implies future carbon pricing
+        # Range: $0 (no policy) to $100/ton (aggressive)
+        UncertaintyDistribution(
+            name="carbon_price",
+            base_value=50.0,   # $50/ton reference
+            distribution_type="triangular",
+            min_value=0.0,     # No carbon price
+            max_value=100.0,   # High carbon price
+            mode=30.0,         # Most likely moderate price
+        ),
+        
+        # DEMAND MULTIPLIER: Forecast uncertainty
+        # ±15% reflects demand growth uncertainty
         UncertaintyDistribution(
             name="demand_multiplier",
             base_value=1.0,
             distribution_type="normal",
-            std_dev=0.10,
+            std_dev=0.15,
+        ),
+        
+        # SOLAR CAPACITY FACTOR: Weather variability
+        # 20% ± 20% (less critical than fuel economics)
+        UncertaintyDistribution(
+            name="solar_cf",
+            base_value=0.20,
+            distribution_type="normal",
+            std_dev=0.04,
+        ),
+    ]
+
+
+def create_conservative_uncertainties() -> List[UncertaintyDistribution]:
+    """
+    Create conservative uncertainty distributions for risk-averse planning.
+    
+    Wider ranges for stress testing.
+    
+    Returns:
+        List of UncertaintyDistribution objects
+    """
+    return [
+        # Fuel cost with extreme scenarios
+        UncertaintyDistribution(
+            name="fuel_cost",
+            base_value=0.10,
+            distribution_type="uniform",
+            min_value=0.02,
+            max_value=0.20,
+        ),
+        
+        # Carbon price with policy uncertainty
+        UncertaintyDistribution(
+            name="carbon_price",
+            base_value=50.0,
+            distribution_type="uniform",
+            min_value=0.0,
+            max_value=150.0,
+        ),
+        
+        # Demand with growth uncertainty
+        UncertaintyDistribution(
+            name="demand_multiplier",
+            base_value=1.0,
+            distribution_type="triangular",
+            min_value=0.7,
+            max_value=1.5,
+            mode=1.0,
+        ),
+        
+        # Solar with inter-annual variability
+        UncertaintyDistribution(
+            name="solar_cf",
+            base_value=0.18,
+            distribution_type="uniform",
+            min_value=0.12,
+            max_value=0.25,
         ),
     ]

@@ -335,11 +335,12 @@ class TestDefaultUncertainties:
         """Test creating default uncertainties."""
         uncertainties = create_default_uncertainties()
         
-        assert len(uncertainties) == 3
+        assert len(uncertainties) == 4  # fuel_cost, carbon_price, demand_multiplier, solar_cf
         names = [u.name for u in uncertainties]
         assert "solar_cf" in names
         assert "fuel_cost" in names
         assert "demand_multiplier" in names
+        assert "carbon_price" in names
     
     def test_default_uncertainty_values(self):
         """Test default uncertainty values are reasonable."""
