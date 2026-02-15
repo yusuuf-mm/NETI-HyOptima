@@ -280,7 +280,13 @@ class TestHyOptimaSolver:
     def test_solve_status(self, solved_model):
         """Test optimization status."""
         _, _, results = solved_model
-        assert results["status"] in ["optimal", "feasible", "stoppedByLimit"]
+        # Accept various optimal/feasible status strings from different solvers
+        valid_statuses = [
+            "optimal", "feasible", "stoppedByLimit",
+            "TerminationCondition.convergenceCriteriaSatisfied",
+            "TerminationCondition.optimal",
+        ]
+        assert results["status"] in valid_statuses
     
     def test_capacity_values_non_negative(self, solved_model):
         """Test that capacity values are non-negative."""
@@ -394,7 +400,13 @@ class TestIntegration:
         results = solver.solve(model)
         
         # Verify results
-        assert results["status"] in ["optimal", "feasible"]
+        # Accept various optimal/feasible status strings from different solvers
+        valid_statuses = [
+            "optimal", "feasible",
+            "TerminationCondition.convergenceCriteriaSatisfied",
+            "TerminationCondition.optimal",
+        ]
+        assert results["status"] in valid_statuses
         assert results["total_cost"] > 0
         assert results["metrics"]["reliability"] >= 0.95
     

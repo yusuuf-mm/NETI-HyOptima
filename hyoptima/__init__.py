@@ -14,10 +14,11 @@ Modules:
     - solver: Optimization execution and result extraction
     - parameters: Economic and technical parameters
     - profiles: Load and solar generation profiles
+    - simulation: Monte Carlo simulation for uncertainty analysis
     - utils: Utility functions for visualization and analysis
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __author__ = "NETI-HyOptima Team"
 __description__ = "Hybrid Energy Optimization Engine for Nigeria's Energy Transition"
 
@@ -25,6 +26,13 @@ from .model import HyOptimaModel
 from .solver import HyOptimaSolver
 from .parameters import EconomicParameters, TechnicalParameters, PolicyParameters
 from .profiles import LoadProfile, SolarProfile, generate_nigeria_scenarios
+from .simulation import (
+    MonteCarloSimulator,
+    UncertaintyDistribution,
+    SimulationConfig,
+    SimulationResult,
+    create_default_uncertainties,
+)
 
 __all__ = [
     # Core model and solver
@@ -38,4 +46,10 @@ __all__ = [
     "LoadProfile",
     "SolarProfile",
     "generate_nigeria_scenarios",
+    # Simulation
+    "MonteCarloSimulator",
+    "UncertaintyDistribution",
+    "SimulationConfig",
+    "SimulationResult",
+    "create_default_uncertainties",
 ]

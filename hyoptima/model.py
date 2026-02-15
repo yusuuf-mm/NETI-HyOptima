@@ -185,6 +185,30 @@ class HyOptimaModel:
             within=NonNegativeReals,
             doc="Battery CAPEX ($/kWh)"
         )
+        
+        # Annualized CAPEX using Capital Recovery Factor (CRF)
+        m.solar_capex_annualized = Param(
+            initialize=self.economic.get_annualized_cost(
+                self.economic.solar_capex, self.economic.solar_lifetime
+            ),
+            within=NonNegativeReals,
+            doc="Annualized solar CAPEX ($/kW/year)"
+        )
+        m.gas_capex_annualized = Param(
+            initialize=self.economic.get_annualized_cost(
+                self.economic.gas_capex, self.economic.gas_lifetime
+            ),
+            within=NonNegativeReals,
+            doc="Annualized gas CAPEX ($/kW/year)"
+        )
+        m.battery_capex_annualized = Param(
+            initialize=self.economic.get_annualized_cost(
+                self.economic.battery_capex, self.economic.battery_lifetime
+            ),
+            within=NonNegativeReals,
+            doc="Annualized battery CAPEX ($/kWh/year)"
+        )
+        
         m.gas_fuel_cost = Param(
             initialize=self.economic.gas_fuel_cost,
             within=NonNegativeReals,
@@ -199,6 +223,11 @@ class HyOptimaModel:
             initialize=self.economic.unserved_energy_penalty,
             within=NonNegativeReals,
             doc="Unserved energy penalty ($/kWh)"
+        )
+        m.emission_penalty = Param(
+            initialize=self.economic.emission_penalty,
+            within=NonNegativeReals,
+            doc="Carbon price ($/ton CO2)"
         )
         
         # --- Technical Parameters ---
@@ -246,6 +275,11 @@ class HyOptimaModel:
             initialize=self.technical.emission_factor_gas,
             within=NonNegativeReals,
             doc="Gas emission factor (kg CO2/kWh)"
+        )
+        m.gas_ramp_rate = Param(
+            initialize=self.technical.gas_ramp_rate,
+            within=NonNegativeReals,
+            doc="Gas generator ramp rate (fraction of capacity per hour)"
         )
         m.target_reliability = Param(
             initialize=self.technical.target_reliability,
@@ -333,6 +367,13 @@ class HyOptimaModel:
             doc="Gas generator on/off status"
         )
         
+        # Battery mode binary: 1 = charging, 0 = discharging
+        m.battery_charging = Var(
+            m.T,
+            within=Binary,
+            doc="Battery charging mode (1=charging, 0=discharging/idle)"
+        )
+        
         # ===================
         # OBJECTIVE FUNCTION
         # ===================
@@ -341,17 +382,21 @@ class HyOptimaModel:
             """
             Minimize total system cost.
             
-            Total Cost = Investment Cost + Fuel Cost + Grid Cost + Penalty Cost
+            Total Cost = Annualized Investment Cost + Fuel Cost + Grid Cost + Carbon Cost + Penalty Cost
             
-            Note: This is a simplified formulation. For full LCOE calculation,
-            costs should be annualized using the discount rate.
+            CAPEX is annualized using Capital Recovery Factor (CRF):
+            CRF = r(1+r)^n / ((1+r)^n - 1)
+            Annualized CAPEX = CAPEX × CRF
             """
-            # Investment cost (simplified - not annualized in this version)
+            # Annualized investment cost using CRF
+            # Note: For a single-day optimization, we scale by (1/365) to get daily cost
+            daily_factor = 1.0 / 365.0
+            
             investment_cost = (
-                model.solar_capacity * model.solar_capex +
-                model.gas_capacity * model.gas_capex +
-                model.battery_capacity * model.battery_capex
-            )
+                model.solar_capacity * model.solar_capex_annualized +
+                model.gas_capacity * model.gas_capex_annualized +
+                model.battery_capacity * model.battery_capex_annualized
+            ) * daily_factor
             
             # Operating cost: fuel for gas generator
             fuel_cost = sum(
@@ -365,13 +410,19 @@ class HyOptimaModel:
                 for t in model.T
             )
             
+            # Carbon cost (emission penalty)
+            carbon_cost = sum(
+                model.gas_gen[t] * model.emission_factor_gas * model.emission_penalty / 1000.0
+                for t in model.T
+            )
+            
             # Penalty for unserved energy (reliability incentive)
             penalty_cost = sum(
                 model.unserved[t] * model.unserved_penalty 
                 for t in model.T
             )
             
-            return investment_cost + fuel_cost + grid_cost + penalty_cost
+            return investment_cost + fuel_cost + grid_cost + carbon_cost + penalty_cost
         
         m.TotalCost = Objective(rule=total_cost_rule, sense=minimize)
         
@@ -521,6 +572,52 @@ class HyOptimaModel:
             return model.battery_discharge[t] <= model.battery_capacity * model.battery_c_rate
         
         m.BatteryDischargeCapacityLimit = Constraint(m.T, rule=battery_discharge_capacity_limit_rule)
+        
+        # --- Battery Mutual Exclusivity (Charge XOR Discharge) ---
+        # Using Big-M method to prevent simultaneous charge and discharge
+        # charge[t] <= M * battery_charging[t]
+        # discharge[t] <= M * (1 - battery_charging[t])
+        def battery_charge_exclusivity_rule(model, t):
+            """
+            Battery can only charge when in charging mode.
+            battery_charge[t] <= max_battery * c_rate * battery_charging[t]
+            """
+            return model.battery_charge[t] <= model.max_battery * model.battery_c_rate * model.battery_charging[t]
+        
+        m.BatteryChargeExclusivity = Constraint(m.T, rule=battery_charge_exclusivity_rule)
+        
+        def battery_discharge_exclusivity_rule(model, t):
+            """
+            Battery can only discharge when not in charging mode.
+            battery_discharge[t] <= max_battery * c_rate * (1 - battery_charging[t])
+            """
+            return model.battery_discharge[t] <= model.max_battery * model.battery_c_rate * (1 - model.battery_charging[t])
+        
+        m.BatteryDischargeExclusivity = Constraint(m.T, rule=battery_discharge_exclusivity_rule)
+        
+        # --- Gas Generator Ramp Rate Constraint ---
+        # Limit how quickly gas generation can change between consecutive hours
+        def gas_ramp_up_rule(model, t):
+            """
+            Gas generation ramp-up limit.
+            gas_gen[t] - gas_gen[t-1] <= ramp_rate * gas_capacity
+            """
+            if t == 0:
+                return Constraint.Skip  # No previous period for t=0
+            return model.gas_gen[t] - model.gas_gen[t-1] <= model.gas_ramp_rate * model.gas_capacity
+        
+        m.GasRampUp = Constraint(m.T, rule=gas_ramp_up_rule)
+        
+        def gas_ramp_down_rule(model, t):
+            """
+            Gas generation ramp-down limit.
+            gas_gen[t-1] - gas_gen[t] <= ramp_rate * gas_capacity
+            """
+            if t == 0:
+                return Constraint.Skip  # No previous period for t=0
+            return model.gas_gen[t-1] - model.gas_gen[t] <= model.gas_ramp_rate * model.gas_capacity
+        
+        m.GasRampDown = Constraint(m.T, rule=gas_ramp_down_rule)
         
         # --- Reliability Constraint ---
         def reliability_constraint_rule(model):
